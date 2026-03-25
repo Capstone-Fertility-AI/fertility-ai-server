@@ -246,25 +246,6 @@ def _female_parity_bonus(feature_dict: dict[str, float]) -> int:
     return 0
 
 
-def score_from_female_risk_prob_calibrated(risk_prob: float) -> int:
-    """
-    여성 raw 위험확률을 UX 점수로 보정.
-    parity 가산점이 없어도 저위험 입력은 100점 근처로 보이도록 상단 구간을 확장한다.
-    """
-    p = float(max(0.0, min(1.0, risk_prob)))
-    p_sat = 0.18
-    if p <= p_sat:
-        return 100
-    if p <= 0.20:
-        # p_sat(100) -> 0.20(95) 연속 선형
-        s = 100.0 - 5.0 * ((p - p_sat) / (0.20 - p_sat))
-    elif p <= 0.40:
-        s = 95.0 - 35.0 * ((p - 0.20) / 0.20)  # 95 -> 60
-    else:
-        s = max(0.0, 60.0 * (1.0 - (p - 0.40) / 0.60))  # 60 -> 0
-    return int(round(max(0.0, min(100.0, s))))
-
-
 def _female_risk_prob_without_parity_penalty(
     model: Any,
     feature_names: list[str],
@@ -945,7 +926,9 @@ class FertilityInferenceEngine:
             # 여성: 미출산 감점 제거 + 임상 하한 보정 + 출산 경험 가산점
             p = _female_risk_prob_without_parity_penalty(model, cols, feature_dict, risk_prob)
             p = _apply_female_clinical_risk_floor(feature_dict, p)
-            base_score = score_from_female_risk_prob_calibrated(p)
+            # 남성과 동일한 p→점수 곡선(저위험 포화 p_sat=0.32 등). 별도 여성 곡선은 저위험에서만 100이 나와
+            # 동일 프로필 대비 남 100 / 여 90대처럼 어긋나는 문제가 있었음.
+            base_score = score_from_risk_prob_calibrated(p)
             final_score = int(max(0, min(100, base_score + _female_parity_bonus(feature_dict))))
             risk_prob = p
 
