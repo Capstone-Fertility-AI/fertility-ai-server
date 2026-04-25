@@ -411,36 +411,18 @@ def build_top_factor_strings(
     feature_names: list[str],
 ) -> tuple[str, str, str, list[str]]:
     """
-    위험 요인 우선 → 부족 시 긍정 요인 → SHAP(가능 시) 보조.
-    반환: top1, top2, top3, top_factors(길이 3).
+    활성 위험 요인 전체 목록을 반환한다(정상/긍정 요인 제외).
+    - top_factors: 활성 위험 요인 전체
+    - top1~3: 하위 호환용으로 앞 3개만 노출(부족 시 '위험 요인 없음')
     """
-    risk = extract_top_factors(gender, feature_dict, max_items=3)
-    positive = extract_positive_factors(gender, feature_dict)
-    shap_names = _optional_shap_risk_feature_names(model, X, feature_names, max_items=3)
-
-    combined: list[str] = []
-    seen: set[str] = set()
-    for r in risk:
-        if r not in seen:
-            combined.append(r)
-            seen.add(r)
-    for p in positive:
-        if len(combined) >= 3:
-            break
-        if p not in seen:
-            combined.append(p)
-            seen.add(p)
-    if shap_names and len(combined) < 3:
-        name_to_hint = {n: f"모델 기여도 상위: {n}" for n in feature_names}
-        for n in shap_names:
-            if len(combined) >= 3:
-                break
-            hint = name_to_hint.get(n, f"피처 기여: {n}")
-            if hint not in seen:
-                combined.append(hint)
-                seen.add(hint)
-    t1, t2, t3 = _pad_three_strings(combined)
-    return t1, t2, t3, [t1, t2, t3]
+    # 현재 정책: 위험 요인은 "전부" 보여주고, 정상/긍정 요인은 top_factors에 섞지 않는다.
+    # model/X/feature_names는 SHAP 확장 시 재사용 가능하도록 시그니처는 유지한다.
+    del model, X, feature_names
+    risk_all = extract_top_factors(gender, feature_dict, max_items=999)
+    if not risk_all:
+        return "위험 요인 없음", "위험 요인 없음", "위험 요인 없음", []
+    t1, t2, t3 = _pad_three_strings(risk_all[:3])
+    return t1, t2, t3, risk_all
 
 
 def _factor_label_to_mission_category(label: str) -> str:
@@ -935,10 +917,9 @@ class FertilityInferenceEngine:
         risk_pct = round(risk_prob * 100.0, 1)
         bmi = _bmi_value(_safe_float(data.get("height"), 170.0), _safe_float(data.get("weight"), 65.0))
 
-        t1, t2, t3, top_list = build_top_factor_strings(
+        _, _, _, top_list = build_top_factor_strings(
             gender, feature_dict, model, X, cols
         )
-        mission_candidates = build_mission_candidates_from_factors(top_list, max_items=3)
 
         return {
             "gender": gender,
@@ -947,8 +928,4 @@ class FertilityInferenceEngine:
             "risk_probability": risk_pct,
             "bmi": float(bmi),
             "top_factors": top_list,
-            "top1_factor": t1,
-            "top2_factor": t2,
-            "top3_factor": t3,
-            "mission_candidates": mission_candidates,
         }

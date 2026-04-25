@@ -245,7 +245,7 @@ UserHealthData = PredictionRequestWithGender
 
 
 class PredictResult(BaseModel):
-    """Spring 연동: aiScore, top1Factor~3Factor는 serialization_alias로 내려갈 수 있음."""
+    """Spring 연동용 응답 모델."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -254,11 +254,7 @@ class PredictResult(BaseModel):
     ai_score: int = Field(serialization_alias="aiScore", description="보정된 건강/난임 점수(동일 값)")
     risk_probability: float
     bmi: float
-    top_factors: list[str] = Field(description="항상 길이 3")
-    top1_factor: str = Field(serialization_alias="top1Factor")
-    top2_factor: str = Field(serialization_alias="top2Factor")
-    top3_factor: str = Field(serialization_alias="top3Factor")
-    mission_candidates: list[str] = Field(default_factory=list, description="top_factors 기반 행동 미션 후보(중복 카테고리 제거)")
+    top_factors: list[str] = Field(description="활성 위험 요인 전체 목록(정상/긍정 요인 제외)")
 
 
 class PredictResponse(BaseModel):
