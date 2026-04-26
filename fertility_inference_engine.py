@@ -312,19 +312,19 @@ def adjust_ai_score_for_ux(raw_score: float, *, clinical_flag_count: int = 0) ->
     return int(round(max(0.0, min(100.0, s))))
 
 
-def _pad_three_strings(parts: list[str]) -> tuple[str, str, str]:
-    """Spring top1~3 null 방지: 항상 문자열 3개."""
-    pad = (
-        "전반적으로 양호한 건강 지표",
-        "모델 예측 저위험 구간",
-        "추가 위험 요인 미검출",
-    )
-    out = list(parts)[:3]
-    i = 0
-    while len(out) < 3:
-        out.append(pad[i % len(pad)])
-        i += 1
-    return out[0], out[1], out[2]
+def _sanitize_factor_labels(parts: list[str]) -> list[str]:
+    """None/빈문자/중복을 제거한 위험 요인 라벨 목록."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        s = str(p).strip() if p is not None else ""
+        if not s:
+            continue
+        if s in seen:
+            continue
+        out.append(s)
+        seen.add(s)
+    return out
 
 
 def extract_positive_factors(gender: str, feature_dict: dict[str, float]) -> list[str]:
@@ -403,26 +403,22 @@ def _optional_shap_risk_feature_names(
         return None
 
 
-def build_top_factor_strings(
+def build_all_risk_factors(
     gender: str,
     feature_dict: dict[str, float],
     model: Any,
     X: pd.DataFrame,
     feature_names: list[str],
-) -> tuple[str, str, str, list[str]]:
+) -> list[str]:
     """
-    활성 위험 요인 전체 목록을 반환한다(정상/긍정 요인 제외).
-    - top_factors: 활성 위험 요인 전체
-    - top1~3: 하위 호환용으로 앞 3개만 노출(부족 시 '위험 요인 없음')
+    활성 위험 요인 전체(0~N개)를 반환.
+    - 정상/긍정 요인 미포함
+    - legacy Top3 패딩/고정 길이 없음
+    - 현재 정책은 임상 우선순위에 따른 활성 플래그 필터링
     """
-    # 현재 정책: 위험 요인은 "전부" 보여주고, 정상/긍정 요인은 top_factors에 섞지 않는다.
-    # model/X/feature_names는 SHAP 확장 시 재사용 가능하도록 시그니처는 유지한다.
     del model, X, feature_names
     risk_all = extract_top_factors(gender, feature_dict, max_items=999)
-    if not risk_all:
-        return "위험 요인 없음", "위험 요인 없음", "위험 요인 없음", []
-    t1, t2, t3 = _pad_three_strings(risk_all[:3])
-    return t1, t2, t3, risk_all
+    return _sanitize_factor_labels(risk_all)
 
 
 def _factor_label_to_mission_category(label: str) -> str:
@@ -553,20 +549,13 @@ def _get_menarche_age(data: dict[str, Any]) -> float:
 
 def extract_top_factors(gender: str, feature_dict: dict[str, float], max_items: int = 3) -> list[str]:
     """
-    조립된 피처 dict 기준, 값 > 0 인 요인 중 우선순위 상위 max_items개 한글 라벨.
-
-    UX: 40세 이상이면 AGE_35PLUS는 생략(중복 '만 35세/40세' 노출 방지).
+    조립된 피처 dict 기준, 값 > 0 인 활성 위험 요인을 우선순위대로 반환.
+    max_items를 주면 해당 개수만큼 자른다(기본 3은 레거시 호출 호환).
     """
     g = gender.lower()
     priority = MALE_RISK_PRIORITY if g == "male" else FEMALE_RISK_PRIORITY
 
-    # 미션 생성용 가독성 개선:
-    # 성병 관련 요인은 점수에는 반영하되, top3 표시는 비성병 요인 우선.
-    # 비성병이 부족할 때만 성병 요인으로 보충하며, 성병 라벨은 최대 1개만 노출한다.
-    std_keys = {"CHLAM", "GON", "ANY_STD", "HAS_STD"}
-
     out: list[str] = []
-    std_pool: list[str] = []
     seen_labels: set[str] = set()
 
     for key, label in priority:
@@ -576,18 +565,11 @@ def extract_top_factors(gender: str, feature_dict: dict[str, float], max_items: 
             continue
         if label in seen_labels:
             continue
-        if key in std_keys:
-            std_pool.append(label)
-            seen_labels.add(label)
-            continue
         out.append(label)
         seen_labels.add(label)
-        if len(out) >= max_items:
+        if max_items > 0 and len(out) >= max_items:
             return out
-
-    if len(out) < max_items and std_pool:
-        out.append(std_pool[0])
-    return out[:max_items]
+    return out
 
 
 def assemble_male_feature_dict(data: dict[str, Any]) -> dict[str, float]:
@@ -917,7 +899,7 @@ class FertilityInferenceEngine:
         risk_pct = round(risk_prob * 100.0, 1)
         bmi = _bmi_value(_safe_float(data.get("height"), 170.0), _safe_float(data.get("weight"), 65.0))
 
-        _, _, _, top_list = build_top_factor_strings(
+        top_list = build_all_risk_factors(
             gender, feature_dict, model, X, cols
         )
 
