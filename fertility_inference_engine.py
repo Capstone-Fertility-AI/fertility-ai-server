@@ -327,89 +327,13 @@ def _sanitize_factor_labels(parts: list[str]) -> list[str]:
     return out
 
 
-def extract_positive_factors(gender: str, feature_dict: dict[str, float]) -> list[str]:
-    """위험 플래그가 없을 때: 긍정 요인 규칙 (SHAP 미사용 시에도 동작)."""
-    out: list[str] = []
-    bmi = float(feature_dict.get("BMI", 0.0))
-    g = gender.lower()
-    if g == "male":
-        if 18.5 <= bmi < 23.0:
-            out.append("건강한 BMI(정상 범위) 유지")
-        elif 23.0 <= bmi < 25.0:
-            out.append("BMI 과체중 범위(관리 권장)")
-        if float(feature_dict.get("SMK100", 0)) == 0 and float(feature_dict.get("SMOKE30", 0)) == 0:
-            out.append("비흡연")
-        if float(feature_dict.get("DRINK12", 0)) < 3.0:
-            out.append("절주·비음주")
-        age = float(feature_dict.get("AGE_R", 0))
-        if 18.0 <= age <= 34.0:
-            out.append("생식 건강에 유리한 연령대")
-        if float(feature_dict.get("LOW_SEX_FREQ", 0)) == 0 and float(feature_dict.get("SEXFREQ", 0)) > 0:
-            out.append("적정 수준의 성관계 빈도 보고")
-        if float(feature_dict.get("ANY_STD", 0)) == 0:
-            out.append("성병 위험 요인(보고) 없음")
-    else:
-        if 18.5 <= bmi < 23.0:
-            out.append("건강한 BMI(정상 범위) 유지")
-        if float(feature_dict.get("OPTIMAL_AGE", 0)) > 0:
-            out.append("적정 연령대")
-        if float(feature_dict.get("DISEASE_COUNT", 0)) == 0:
-            out.append("보고된 주요 질환 없음")
-        if float(feature_dict.get("IS_SMOKER", 0)) == 0:
-            out.append("비흡연")
-        if float(feature_dict.get("IS_HEAVY_DRINKER", 0)) == 0:
-            out.append("과도한 음주 없음")
-        if float(feature_dict.get("IS_OBESE", 0)) == 0 and float(feature_dict.get("IS_UNDERWEIGHT", 0)) == 0:
-            out.append("비만·저체중 위험 낮음")
-    seen: set[str] = set()
-    dedup: list[str] = []
-    for x in out:
-        if x not in seen:
-            dedup.append(x)
-            seen.add(x)
-    return dedup
-
-
-def _optional_shap_risk_feature_names(
-    model: Any,
-    X: pd.DataFrame,
-    feature_names: list[str],
-    max_items: int = 3,
-) -> list[str] | None:
-    """
-    SHAP(TreeExplainer) 시도. VotingClassifier·앙상블은 실패가 흔함 → None이면 규칙 기반만 사용.
-    """
-    try:
-        import numpy as np
-
-        est = getattr(model, "estimators_", None)
-        if not est:
-            return None
-        sub = est[0][1]
-        import shap
-
-        explainer = shap.TreeExplainer(sub)
-        shap_vals = explainer.shap_values(X)
-        if isinstance(shap_vals, list):
-            shap_vals = shap_vals[1] if len(shap_vals) > 1 else shap_vals[0]
-        row = np.asarray(shap_vals).reshape(-1)
-        n = min(len(row), len(feature_names))
-        if n < 1:
-            return None
-        top = np.argsort(-np.abs(row[:n]))[:max_items]
-        return [feature_names[int(i)] for i in top]
-    except Exception as e:
-        logger.debug("SHAP 생략(앙상블/환경): %s", e)
-        return None
-
-
 def build_all_risk_factors(
     gender: str,
     feature_dict: dict[str, float],
     model: Any,
     X: pd.DataFrame,
     feature_names: list[str],
-) -> list[str]:
+) -> tuple[list[str], int, int]:
     """
     활성 위험 요인 전체(0~N개)를 반환.
     - 정상/긍정 요인 미포함
@@ -417,60 +341,9 @@ def build_all_risk_factors(
     - 현재 정책은 임상 우선순위에 따른 활성 플래그 필터링
     """
     del model, X, feature_names
-    risk_all = extract_top_factors(gender, feature_dict, max_items=999)
-    return _sanitize_factor_labels(risk_all)
-
-
-def _factor_label_to_mission_category(label: str) -> str:
-    s = str(label).strip()
-    if any(k in s for k in ("비만", "과체중", "저체중", "BMI")):
-        return "bmi"
-    if any(k in s for k in ("음주", "폭음")):
-        return "drink"
-    if any(k in s for k in ("흡연",)):
-        return "smoke"
-    if any(k in s for k in ("PCOS", "자궁내막", "자궁근종", "골반염", "성병", "클라미디아", "임균", "생식기 질환")):
-        return "disease"
-    if any(k in s for k in ("연령", "고령", "만 35", "만 40")):
-        return "checkup"
-    return "general"
-
-
-_MISSION_TEMPLATE_BY_CATEGORY: dict[str, str] = {
-    "bmi": "체중·BMI 관리 미션: 4주간 주 5일 30분 걷기와 야식/당류 50% 감축을 실천해 적정 체중 범위에 가깝게 조정하세요.",
-    "drink": "음주 관리 미션: 4주간 폭음 0회, 음주 횟수는 주 1회 이하로 제한하세요.",
-    "smoke": "금연 미션: 오늘부터 4주 금연 계획을 시작하고, 흡연 유발 상황을 기록해 대체 행동(물 마시기/산책)으로 전환하세요.",
-    "disease": "질환 관리 미션: 2주 내 산부인과 상담을 예약하고 현재 질환(PCOS/골반염/기타) 추적 검사 일정을 확정하세요.",
-    "checkup": "검진 미션: 2주 내 난임·생식건강 기본 검진(호르몬·초음파 등) 일정을 잡고 결과를 기반으로 관리 계획을 세우세요.",
-    "general": "생활습관 미션: 2주간 수면 7시간 이상, 주 150분 유산소 운동, 균형식 식단을 꾸준히 유지하세요.",
-}
-
-
-def build_mission_candidates_from_factors(top_factors: list[str], max_items: int = 3) -> list[str]:
-    """
-    top_factors를 카테고리로 압축해 중복 미션을 방지한다.
-    같은 카테고리는 1개만 선택하고, 부족하면 일반 미션으로 채운다.
-    """
-    out: list[str] = []
-    used_categories: set[str] = set()
-    for factor in top_factors:
-        cat = _factor_label_to_mission_category(factor)
-        if cat in used_categories:
-            continue
-        out.append(_MISSION_TEMPLATE_BY_CATEGORY.get(cat, _MISSION_TEMPLATE_BY_CATEGORY["general"]))
-        used_categories.add(cat)
-        if len(out) >= max_items:
-            return out
-
-    fallback_order = ["checkup", "bmi", "drink", "smoke", "general"]
-    for cat in fallback_order:
-        if len(out) >= max_items:
-            break
-        if cat in used_categories:
-            continue
-        out.append(_MISSION_TEMPLATE_BY_CATEGORY[cat])
-        used_categories.add(cat)
-    return out[:max_items]
+    raw_candidates = extract_top_factors(gender, feature_dict, max_items=999)
+    filtered = _sanitize_factor_labels(raw_candidates)
+    return filtered, len(raw_candidates), len(filtered)
 
 
 def _bmi_value(height_cm: float, weight_kg: float) -> float:
@@ -899,8 +772,18 @@ class FertilityInferenceEngine:
         risk_pct = round(risk_prob * 100.0, 1)
         bmi = _bmi_value(_safe_float(data.get("height"), 170.0), _safe_float(data.get("weight"), 65.0))
 
-        top_list = build_all_risk_factors(
+        top_list, raw_factor_count, filtered_factor_count = build_all_risk_factors(
             gender, feature_dict, model, X, cols
+        )
+        request_id = str(data.get("_request_id", "n/a"))
+        logger.info(
+            "request_id=%s gender=%s top_factors_raw=%d top_factors_filtered=%d top_factors_len=%d top_factors_preview=%s",
+            request_id,
+            gender,
+            raw_factor_count,
+            filtered_factor_count,
+            len(top_list),
+            top_list[:5],
         )
 
         return {

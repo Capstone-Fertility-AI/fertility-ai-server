@@ -6,6 +6,7 @@ import logging
 import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
@@ -268,7 +269,10 @@ def _predict_core(data: dict[str, Any]) -> PredictResponse:
             f"gender={data['gender']} 에 해당하는 모델이 없습니다. "
             f"load_errors={engine.load_errors}"
         )
-    result = engine.predict(data)
+    request_id = str(data.get("request_id") or data.get("session_id") or uuid4())
+    enriched = dict(data)
+    enriched["_request_id"] = request_id
+    result = engine.predict(enriched)
     return PredictResponse(
         status="success",
         result=PredictResult(**result),
