@@ -777,13 +777,13 @@ class FertilityInferenceEngine:
         )
         request_id = str(data.get("_request_id", "n/a"))
         logger.info(
-            "request_id=%s gender=%s top_factors_raw=%d top_factors_filtered=%d top_factors_len=%d top_factors_preview=%s",
+            "[AI_FACTORS] session=%s gender=%s raw=%d filtered=%d final=%d preview=%s",
             request_id,
             gender,
             raw_factor_count,
             filtered_factor_count,
             len(top_list),
-            top_list[:5],
+            top_list[:10],
         )
 
         return {

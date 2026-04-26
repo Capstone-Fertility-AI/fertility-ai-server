@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import traceback
 from contextlib import asynccontextmanager
 from typing import Any, Literal
@@ -19,8 +20,22 @@ logger = logging.getLogger(__name__)
 engine = FertilityInferenceEngine()
 
 
+def _current_commit_sha() -> str:
+    """실행 중인 코드의 git SHA를 best-effort로 반환."""
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return out.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("[AI_STARTUP] commit_sha=%s", _current_commit_sha())
     engine.load_models()
     if engine.load_errors:
         logger.warning("일부 모델 로드 실패: %s", engine.load_errors)
