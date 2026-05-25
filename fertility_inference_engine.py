@@ -214,17 +214,29 @@ def _apply_female_clinical_risk_floor(feature_dict: dict[str, float], risk_prob:
     # PCOS/폭음만 켰을 때도 모델이 비단조로 역전하는 케이스가 있어
     # 해당 신호가 켜지면 위험확률 하한을 더 강하게 걸어준다.
     #
-    # [흡연 floor 차등 적용]
-    # 기존 0.56 고정은 SMOKE30=1(가벼운 흡연)도 59점으로 만들어 UX상 과도하게 낮음.
-    # 실제 smoke_amount를 확인해 가벼운/일반 흡연을 구분한다.
+    # [흡연 floor 차등 적용 — 원시 개비 수 기준]
+    # 여성 모델은 IS_SMOKER(0/1 이진)만 학습 피처로 사용하므로,
+    # 모델 자체는 SMOKE30=3 과 10을 동일하게 본다.
+    # 개비 수(원시값)에 따라 floor를 달리해 점수를 자연스럽게 차등화한다.
+    #   1개비   → ~79점 (p≥0.40)
+    #   2~4개비 → ~64점 (p≥0.52)
+    #   5~9개비 → ~59점 (p≥0.56)
+    #   10~14   → ~54점 (p≥0.60)
+    #   15+     → ~49점 (p≥0.64)
     if smoker:
         smoke_level = float(
             feature_dict.get("SMOKE_LEVEL", feature_dict.get("SMOKE30", 0.0))
         )
-        if smoke_level >= 2:
-            p = max(p, 0.52)   # 일반 흡연(SMOKE30≥2) → ~64점
+        if smoke_level >= 15:
+            p = max(p, 0.64)
+        elif smoke_level >= 10:
+            p = max(p, 0.60)
+        elif smoke_level >= 5:
+            p = max(p, 0.56)
+        elif smoke_level >= 2:
+            p = max(p, 0.52)
         else:
-            p = max(p, 0.40)   # 가벼운 흡연(SMOKE30=1) → ~79점
+            p = max(p, 0.40)   # SMOKE30=1(가벼운 흡연)
     if pcos:
         p = max(p, 0.62)
         # 고연령·저체중에서는 PCOS 단독 토글 역전이 더 자주 발생해 하한을 추가 상향
