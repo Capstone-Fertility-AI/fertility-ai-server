@@ -213,8 +213,18 @@ def _apply_female_clinical_risk_floor(feature_dict: dict[str, float], risk_prob:
     # 단조성 안전장치(여성):
     # PCOS/폭음만 켰을 때도 모델이 비단조로 역전하는 케이스가 있어
     # 해당 신호가 켜지면 위험확률 하한을 더 강하게 걸어준다.
+    #
+    # [흡연 floor 차등 적용]
+    # 기존 0.56 고정은 SMOKE30=1(가벼운 흡연)도 59점으로 만들어 UX상 과도하게 낮음.
+    # 실제 smoke_amount를 확인해 가벼운/일반 흡연을 구분한다.
     if smoker:
-        p = max(p, 0.56)
+        smoke_level = float(
+            feature_dict.get("SMOKE_LEVEL", feature_dict.get("SMOKE30", 0.0))
+        )
+        if smoke_level >= 2:
+            p = max(p, 0.52)   # 일반 흡연(SMOKE30≥2) → ~64점
+        else:
+            p = max(p, 0.40)   # 가벼운 흡연(SMOKE30=1) → ~79점
     if pcos:
         p = max(p, 0.62)
         # 고연령·저체중에서는 PCOS 단독 토글 역전이 더 자주 발생해 하한을 추가 상향
